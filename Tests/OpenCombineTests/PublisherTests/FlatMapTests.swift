@@ -71,6 +71,8 @@ final class FlatMapTests: XCTestCase {
          testAllSubscriptionsReleasedOnChildFailure),
         ("testSendsSubcriptionDownstreamBeforeDemandUpstream",
          testSendsSubcriptionDownstreamBeforeDemandUpstream),
+        ("testConfirmAppleCrash", testConfirmAppleCrash),
+        ("testConfirmAppleDeadlock", testConfirmAppleDeadlock),
         ("testTestSuiteIncludesAllTests", testTestSuiteIncludesAllTests)
     ]
 
@@ -97,6 +99,66 @@ final class FlatMapTests: XCTestCase {
         XCTAssertEqual(downstreamSubscriber.history, [.subscription("FlatMap"),
                                                       .value(666),
                                                       .value(777)])
+    }
+
+    // The following two tests won't actually pass. They crash and deadlock. They were
+    // writtent to confirm Apple's decision to call out with a lock held - which is a
+    // crazy anti-pattern in API design.
+    //
+    // The first test crashes in `_os_unfair_lock_recursive_abort` which the notice
+    // “BUG IN CLIENT OF LIBPLATFORM: Trying to recursively lock an os_unfair_lock”.
+    // Of course, in this case, Combine itself (not the consumer of Combine) is the client
+    // of LibPlatform.
+    //
+    // The second test doesn't crash because it does not re-enter. Rather it deadlocks
+    // because it attempts to send a value on child2 from another thread. Of course, the
+    // code in the test is a bit contrived. The reality is that real world cases would be
+    // much more complex/indirect - as deadlocks often are. However, it still exemplifies
+    // the anti-pattern since it should be impossible for a consumer of Combine to induce
+    // a deadlock.
+    func testConfirmAppleCrash() {
+        #if OPENCOMBINE_COMPATIBILITY_TEST
+        let upstream = PassthroughSubject<PassthroughSubject<Int, Never>, Never>()
+        let child1 = PassthroughSubject<Int, Never>()
+        let child2 = PassthroughSubject<Int, Never>()
+
+        let cancellable = upstream
+            .flatMap { $0 }
+            .sink(receiveValue: {
+                if $0 == 1 { child2.send(2) }
+            })
+
+        upstream.send(child1)
+        upstream.send(child2)
+
+        child1.send(1)
+        #endif
+    }
+
+    func testConfirmAppleDeadlock() {
+        #if OPENCOMBINE_COMPATIBILITY_TEST
+        let upstream = PassthroughSubject<PassthroughSubject<Int, Never>, Never>()
+        let child1 = PassthroughSubject<Int, Never>()
+        let child2 = PassthroughSubject<Int, Never>()
+
+        let cancellable = upstream
+            .flatMap { $0 }
+            .sink(receiveValue: {
+                if $0 == 1 {
+                    let sem = DispatchSemaphore(value: 0)
+                    DispatchQueue.global(qos: .background).async {
+                        child2.send(2)
+                        sem.signal()
+                    }
+                    sem.wait()
+                }
+            })
+
+        upstream.send(child1)
+        upstream.send(child2)
+
+        child1.send(1)
+        #endif
     }
 
     // This test ensures that the code can properly re-enter when synchronously receiving
