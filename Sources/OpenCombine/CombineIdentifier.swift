@@ -11,7 +11,7 @@ import COpenCombineHelpers
 
 public struct CombineIdentifier: Hashable, CustomStringConvertible {
 
-    private let value: UInt64
+    internal let value: UInt64
 
     public init() {
         value = __nextCombineIdentifier()

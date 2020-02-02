@@ -55,7 +55,22 @@ extension Publisher {
     public func subscribe<Subscriber: OpenCombine.Subscriber>(_ subscriber: Subscriber)
         where Failure == Subscriber.Failure, Output == Subscriber.Input
     {
-        receive(subscriber: subscriber)
+        if let hook = DebugHook.getGlobalHook() {
+            if let subscriber = subscriber as? SubscriberTapMarker {
+                let anySubscriber = subscriber.inner
+                    as! AnySubscriber<Subscriber.Input, Subscriber.Failure>
+                hook.willReceive(publisher: self, subscriber: anySubscriber)
+                receive(subscriber: anySubscriber)
+                hook.didReceive(publisher: self, subscriber: anySubscriber)
+            } else {
+                let tap = SubscriberTap(subscriber: subscriber, inner: nil)
+                hook.willReceive(publisher: self, subscriber: tap)
+                receive(subscriber: tap)
+                hook.didReceive(publisher: self, subscriber: tap)
+            }
+        } else {
+            receive(subscriber: subscriber)
+        }
     }
 
     public func subscribe<Subject: OpenCombine.Subject>(
